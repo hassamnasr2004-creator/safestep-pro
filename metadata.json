@@ -1,0 +1,6 @@
+{
+  "name": "SafeStep Booth — بوث السوار الذكي لحماية الأطفال",
+  "description": "منظومة السوار الذكي التفاعلية لحماية الأطفال داخل المراكز التجارية ومراقبة النطاق الآمن لحظياً",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

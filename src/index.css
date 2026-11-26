@@ -1,0 +1,167 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-sans: 'Alexandria', system-ui, -apple-system, sans-serif;
+  }
+
+  html {
+    font-family: var(--font-sans);
+    background-color: #EDF2F7;
+    color: #0F172A;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    min-height: 100vh;
+    background: linear-gradient(145deg, #EDF2F7 0%, #F4F7FA 48%, #F8FAFC 100%);
+    background-attachment: fixed;
+    overflow-x: hidden;
+  }
+
+  button:not(:disabled),
+  [role="button"] {
+    cursor: pointer;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.glass-surface {
+  background: rgba(255, 255, 255, 0.76);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 10px 35px rgba(15, 23, 42, 0.06);
+}
+
+.glass-subtle {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+}
+
+@keyframes tetherFlow {
+  from {
+    stroke-dashoffset: 24;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+.animate-tether-flow {
+  animation: tetherFlow 1.1s linear infinite;
+}
+
+@keyframes radarWave {
+  0% {
+    transform: scale(0.95);
+    opacity: 0.65;
+  }
+  100% {
+    transform: scale(1.75);
+    opacity: 0;
+  }
+}
+
+.animate-radar-wave {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: radarWave 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+@keyframes pinShake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-7px); }
+  40% { transform: translateX(7px); }
+  60% { transform: translateX(-5px); }
+  80% { transform: translateX(5px); }
+}
+
+.animate-pin-shake {
+  animation: pinShake 0.38s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+}
+
+@keyframes gateLaserPulse {
+  0%, 100% { opacity: 0.45; stroke-width: 4; }
+  50% { opacity: 1; stroke-width: 7; }
+}
+
+.animate-gate-laser {
+  animation: gateLaserPulse 0.85s ease-in-out infinite;
+}
+
+/* Range slider architectural refinement */
+input[type="range"].arch-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: #DCE4EE;
+  outline: none;
+}
+
+input[type="range"].arch-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #0F172A;
+  border: 2px solid #FFFFFF;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.25);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+input[type="range"].arch-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
+}
+
+/* Strict A4 Print Stylesheet for QR Studio */
+@page {
+  size: A4 portrait;
+  margin: 10mm;
+}
+
+@media print {
+  html,
+  body {
+    background: #FFFFFF !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-only-root {
+    display: block !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #FFFFFF !important;
+    box-shadow: none !important;
+    border: none !important;
+  }
+
+  .print-sheet-grid {
+    display: grid !important;
+    gap: 5mm !important;
+    page-break-inside: avoid;
+  }
+
+  .print-sticker-card {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    box-shadow: none !important;
+    background: #FFFFFF !important;
+  }
+}
