@@ -1,9 +1,14 @@
 import React, { useState } from 'react';
 import {
+  Activity,
   AlertTriangle,
+  ArrowDownLeft,
+  ArrowUpRight,
   BatteryCharging,
   BellRing,
   CheckCircle2,
+  Compass,
+  Crosshair,
   DoorOpen,
   Footprints,
   KeyRound,
@@ -17,19 +22,26 @@ import {
   VolumeX,
   Wifi,
 } from 'lucide-react';
-import { WRISTBAND_EDITIONS, getZoneBadgeStatus } from '../data/mallConfig';
-import { BandSession, ScenarioId, SyncStatus } from '../types/safestep';
+import { SAFE_RADIUS_PRESETS, WRISTBAND_EDITIONS, getZoneBadgeStatus } from '../data/mallConfig';
+import { BandSession, MobileRole, ScenarioId, SyncStatus } from '../types/safestep';
+import { MotionTelemetry, WalkDirectionMode } from '../utils/physicalMotion';
 import { EditionBadge } from './EditionBadge';
 import { SmartMallMap } from './SmartMallMap';
 
 interface ParentPhoneViewProps {
   band: BandSession | null;
   requestedBandId?: string;
+  mobileRole?: MobileRole;
   standaloneMode: boolean;
   syncStatus: SyncStatus;
   audioEnabled: boolean;
   onUnlockAudio: () => void;
   onToggleAudio: () => void;
+  motionTelemetry?: MotionTelemetry;
+  onActivatePhysicalTracking?: () => void;
+  onSetWalkDirection?: (mode: WalkDirectionMode) => void;
+  onCalibrateZero?: () => void;
+  onUpdateSafeRadius?: (radius: number) => void;
   recoveryToast: string | null;
   onRunScenario?: (scenario: ScenarioId) => void;
   onConfirmClaspLock?: () => void;
@@ -39,20 +51,32 @@ interface ParentPhoneViewProps {
 const PhoneScreenContent: React.FC<{
   band: BandSession | null;
   requestedBandId?: string;
+  mobileRole: MobileRole;
   standaloneMode: boolean;
   syncStatus: SyncStatus;
   audioEnabled: boolean;
   onUnlockAudio: () => void;
   onToggleAudio: () => void;
+  motionTelemetry?: MotionTelemetry;
+  onActivatePhysicalTracking?: () => void;
+  onSetWalkDirection?: (mode: WalkDirectionMode) => void;
+  onCalibrateZero?: () => void;
+  onUpdateSafeRadius?: (radius: number) => void;
   recoveryToast: string | null;
 }> = ({
   band,
   requestedBandId,
+  mobileRole,
   standaloneMode,
   syncStatus,
   audioEnabled,
   onUnlockAudio,
   onToggleAudio,
+  motionTelemetry,
+  onActivatePhysicalTracking,
+  onSetWalkDirection,
+  onCalibrateZero,
+  onUpdateSafeRadius,
   recoveryToast,
 }) => {
   // Handle ended or unavailable band gracefully
@@ -86,6 +110,18 @@ const PhoneScreenContent: React.FC<{
 
   const statusLevel = getZoneBadgeStatus(band);
   const edition = WRISTBAND_EDITIONS[band.editionId];
+  const isTrackingActive = Boolean(motionTelemetry?.active);
+  const isFullyArmed = standaloneMode ? isTrackingActive && audioEnabled : audioEnabled;
+
+  const isDualPhoneActive = Boolean(
+    band.wristbandActiveAt && Date.now() - band.wristbandActiveAt < 60000
+  );
+
+  const isBreached =
+    band.distanceMeters > band.safeRadius ||
+    band.activeAlerts.some((a) => a.type === 'EXIT_GATE_ALERT' || a.type === 'TAMPER_LOCK_ALERT');
+
+  const headerTitle = mobileRole === 'wristband' ? 'سوار الطفل النشط' : 'تطبيق متابعة طفلي';
 
   return (
     <div className="space-y-3.5 pb-4">
@@ -94,7 +130,7 @@ const PhoneScreenContent: React.FC<{
         <div className="flex items-center gap-2.5 min-w-0">
           <EditionBadge editionId={band.editionId} size="sm" />
           <div className="min-w-0">
-            <h1 className="text-sm font-bold text-slate-900 truncate">تطبيق متابعة طفلي</h1>
+            <h1 className="text-sm font-bold text-slate-900 truncate">{headerTitle}</h1>
             <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
               <span className="font-semibold text-slate-700 truncate">{band.childName}</span>
               <span aria-hidden="true">·</span>
@@ -114,33 +150,101 @@ const PhoneScreenContent: React.FC<{
         </div>
       </div>
 
-      <div className="px-4 space-y-3.5">
-        {/* Audio & Vibration Activation Control (Essential for Mobile Safari / Chrome) */}
-        {!audioEnabled ? (
+      <div className="px-4 space-y-3">
+        {/* Prominent One-Tap Sensor + Audio Activation Bar (Mandatory for iOS/Android permissions) */}
+        {!isFullyArmed ? (
           <button
             type="button"
-            onClick={onUnlockAudio}
-            className="w-full py-3 px-4 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-between gap-3 transition-colors shadow-sm"
+            onClick={standaloneMode && onActivatePhysicalTracking ? onActivatePhysicalTracking : onUnlockAudio}
+            className="w-full py-3.5 px-4 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white border border-white/25 shadow-[0_10px_28px_rgba(15,23,42,0.18)] flex items-center justify-between gap-3 transition-all active:scale-[0.99]"
           >
-            <div className="flex items-center gap-2.5">
-              <BellRing className="w-4 h-4 text-teal-300 shrink-0" strokeWidth={1.85} />
-              <span className="text-xs font-semibold">تفعيل التنبيهات الصوتية والاهتزاز</span>
+            <div className="flex items-center gap-2.5 text-right">
+              <div className="w-8 h-8 rounded-xl bg-teal-500/20 text-teal-300 flex items-center justify-center shrink-0">
+                <BellRing className="w-4 h-4" strokeWidth={2} />
+              </div>
+              <div>
+                <div className="text-xs font-bold">
+                  {standaloneMode
+                    ? 'تفعيل التتبع الفعلي بالحركة والصوت'
+                    : 'تفعيل التنبيهات الصوتية والاهتزاز'}
+                </div>
+                <div className="text-[10px] text-slate-300 mt-0.5">
+                  {standaloneMode
+                    ? 'يُفعّل عداد الخطوات والبوصلة 360° وإنذار النطاق فوراً'
+                    : 'اضغط لتشغيل التنبيه الصوتي والاهتزاز'}
+                </div>
+              </div>
             </div>
-            <span className="text-[11px] text-slate-300 shrink-0">اضغط للتفعيل</span>
+            <span className="text-[11px] font-semibold text-teal-300 shrink-0">تفعيل</span>
           </button>
         ) : (
-          <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-teal-50/90 border border-teal-200/80">
-            <div className="flex items-center gap-2 text-xs font-semibold text-teal-900">
-              <Volume2 className="w-4 h-4 text-teal-700" strokeWidth={1.85} />
-              <span>التنبيهات الصوتية والاهتزاز مفعّلة</span>
+          <div className="rounded-2xl px-3.5 py-2.5 bg-teal-50/90 border border-teal-200/80 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-semibold text-teal-900">
+                <Activity className="w-4 h-4 text-teal-700 shrink-0" strokeWidth={1.9} />
+                <span>
+                  {standaloneMode
+                    ? motionTelemetry?.hasCompass
+                      ? 'التتبع الحركي والبوصلة 360° مفعّلان'
+                      : 'التتبع الحركي والصوت مفعّلان'
+                    : 'التنبيهات الصوتية والاهتزاز مفعّلة'}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={onToggleAudio}
+                className="text-[11px] font-semibold text-teal-800 hover:underline flex items-center gap-1 shrink-0"
+              >
+                {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                <span>{audioEnabled ? 'كتم' : 'صوت'}</span>
+              </button>
+            </div>
+            {standaloneMode && motionTelemetry && (
+              <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-teal-800/80 pt-1 border-t border-teal-200/60 tabular-nums">
+                <span>
+                  {isDualPhoneActive
+                    ? mobileRole === 'wristband'
+                      ? 'وضع موبايلين · هذا الهاتف هو سوار الطفل'
+                      : 'وضع موبايلين · هذا الهاتف هو ولي الأمر'
+                    : 'وضع موبايل مع اللاب · امشِ للابتعاد أو العودة'}
+                </span>
+                {motionTelemetry.hasCompass && motionTelemetry.headingDeg !== null && (
+                  <span>زاوية البوصلة {motionTelemetry.headingDeg}°</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Jury Hall Distance Presets + One-Tap Zero Calibration right on Mobile */}
+        {onUpdateSafeRadius && onCalibrateZero && (
+          <div className="rounded-2xl p-2.5 bg-white/85 border border-slate-200/80 space-y-2">
+            <div className="grid grid-cols-3 gap-1.5">
+              {SAFE_RADIUS_PRESETS.map((preset) => {
+                const active = band.safeRadius === preset.radius;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => onUpdateSafeRadius(preset.radius)}
+                    className={`py-2 px-1.5 rounded-xl text-[10px] font-bold transition-colors whitespace-nowrap ${
+                      active
+                        ? 'bg-slate-900 text-white shadow-sm'
+                        : 'bg-slate-100/90 text-slate-700 hover:bg-slate-200/70'
+                    }`}
+                  >
+                    {preset.shortLabel}
+                  </button>
+                );
+              })}
             </div>
             <button
               type="button"
-              onClick={onToggleAudio}
-              className="text-[11px] font-semibold text-teal-800 hover:underline flex items-center gap-1"
+              onClick={onCalibrateZero}
+              className="w-full py-2.5 px-3 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
             >
-              <VolumeX className="w-3.5 h-3.5" />
-              <span>كتم</span>
+              <Crosshair className="w-3.5 h-3.5" strokeWidth={2} />
+              <span>معايرة نقطة الصفر هنا (0 متر)</span>
             </button>
           </div>
         )}
@@ -193,7 +297,7 @@ const PhoneScreenContent: React.FC<{
                 <ShieldCheck className="w-4 h-4" strokeWidth={1.9} />
               </div>
               <div>
-                <div className="text-xs font-bold text-slate-900">طفلك داخل النطاق الآمن</div>
+                <div className="text-xs font-bold text-slate-900">الواصلة النشطة داخل النطاق الآمن</div>
                 <div className="text-[11px] text-slate-500">{edition.name}</div>
               </div>
             </div>
@@ -203,8 +307,55 @@ const PhoneScreenContent: React.FC<{
           </div>
         )}
 
-        {/* Live Architectural Map (Read-Only on Parent Phone) */}
-        <SmartMallMap band={band} readOnly compact />
+        {/* Live Architectural Map with Prominent Tether + Mobile Walk Direction Toggle */}
+        <div className="space-y-2">
+          <SmartMallMap band={band} readOnly compact />
+
+          {/* Floating Walk Direction Selector for Phones Without Magnetometer or Manual Override */}
+          {standaloneMode && onSetWalkDirection && motionTelemetry && (
+            <div className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-white/90 border border-slate-200/80">
+              <span className="text-[11px] font-semibold text-slate-600 shrink-0">اتجاه المشي</span>
+              <div className="grid grid-cols-3 gap-1 flex-1 max-w-[260px]">
+                <button
+                  type="button"
+                  onClick={() => onSetWalkDirection('auto')}
+                  className={`py-1.5 px-2 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition-colors ${
+                    motionTelemetry.directionMode === 'auto'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  <Compass className="w-3 h-3 shrink-0" />
+                  <span>بوصلة 360°</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetWalkDirection('outward')}
+                  className={`py-1.5 px-2 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition-colors ${
+                    motionTelemetry.directionMode === 'outward'
+                      ? 'bg-amber-600 text-white'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  <ArrowUpRight className="w-3 h-3 shrink-0" />
+                  <span>ابتعاد</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSetWalkDirection('inward')}
+                  className={`py-1.5 px-2 rounded-lg text-[10px] font-semibold flex items-center justify-center gap-1 transition-colors ${
+                    motionTelemetry.directionMode === 'inward'
+                      ? 'bg-teal-700 text-white'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  <ArrowDownLeft className="w-3 h-3 shrink-0" />
+                  <span>عودة للداخل</span>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Live Key Metrics Row */}
         <div className="grid grid-cols-3 gap-2">
@@ -212,7 +363,7 @@ const PhoneScreenContent: React.FC<{
             <div className="text-[10px] text-slate-500">المسافة الحالية</div>
             <div
               className={`text-sm font-bold tabular-nums mt-1 ${
-                statusLevel === 'critical'
+                isBreached
                   ? 'text-red-600'
                   : statusLevel === 'warning'
                     ? 'text-amber-600'
@@ -297,11 +448,17 @@ const PhoneScreenContent: React.FC<{
 export const ParentPhoneView: React.FC<ParentPhoneViewProps> = ({
   band,
   requestedBandId,
+  mobileRole = 'parent',
   standaloneMode,
   syncStatus,
   audioEnabled,
   onUnlockAudio,
   onToggleAudio,
+  motionTelemetry,
+  onActivatePhysicalTracking,
+  onSetWalkDirection,
+  onCalibrateZero,
+  onUpdateSafeRadius,
   recoveryToast,
   onRunScenario,
   onConfirmClaspLock,
@@ -323,7 +480,7 @@ export const ParentPhoneView: React.FC<ParentPhoneViewProps> = ({
     }
   };
 
-  // STANDALONE SCANNED SMARTPHONE MODE (?p=BAND_ID) — Strict Role Isolation!
+  // STANDALONE SCANNED SMARTPHONE MODE (?p=BAND_ID or ?w=BAND_ID) — Strict Role Isolation
   if (standaloneMode) {
     return (
       <div className="min-h-screen flex flex-col justify-between max-w-md mx-auto bg-gradient-to-b from-[#EDF2F7] via-[#F4F7FA] to-[#F8FAFC]">
@@ -331,11 +488,17 @@ export const ParentPhoneView: React.FC<ParentPhoneViewProps> = ({
           <PhoneScreenContent
             band={band}
             requestedBandId={requestedBandId}
+            mobileRole={mobileRole}
             standaloneMode
             syncStatus={syncStatus}
             audioEnabled={audioEnabled}
             onUnlockAudio={onUnlockAudio}
             onToggleAudio={onToggleAudio}
+            motionTelemetry={motionTelemetry}
+            onActivatePhysicalTracking={onActivatePhysicalTracking}
+            onSetWalkDirection={onSetWalkDirection}
+            onCalibrateZero={onCalibrateZero}
+            onUpdateSafeRadius={onUpdateSafeRadius}
             recoveryToast={recoveryToast}
           />
         </main>
@@ -403,34 +566,34 @@ export const ParentPhoneView: React.FC<ParentPhoneViewProps> = ({
   // EMBEDDED TAB 2 PREVIEW (معاينة موبايل ولي الأمر) — Realistic Phone Frame + Side Live Tester
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-      {/* Realistic Architectural Smartphone Frame */}
       <div className="lg:col-span-6 flex justify-center">
         <div className="w-full max-w-[390px] rounded-[42px] bg-[#0F172A] p-3 shadow-[0_24px_65px_rgba(15,23,42,0.18)] border border-slate-700/80">
-          {/* Dynamic speaker bar */}
           <div className="flex justify-center pt-1.5 pb-2.5">
             <div className="w-24 h-1.5 rounded-full bg-slate-700" />
           </div>
-          <div className="rounded-[32px] overflow-hidden bg-gradient-to-b from-[#EDF2F7] via-[#F4F7FA] to-[#F8FAFC] max-h-[700px] overflow-y-auto">
+          <div className="rounded-[32px] overflow-hidden bg-gradient-to-b from-[#EDF2F7] via-[#F4F7FA] to-[#F8FAFC] max-h-[720px] overflow-y-auto">
             <PhoneScreenContent
               band={band}
+              mobileRole="parent"
               standaloneMode={false}
               syncStatus={syncStatus}
               audioEnabled={audioEnabled}
               onUnlockAudio={onUnlockAudio}
               onToggleAudio={onToggleAudio}
+              onCalibrateZero={onCalibrateZero}
+              onUpdateSafeRadius={onUpdateSafeRadius}
               recoveryToast={recoveryToast}
             />
           </div>
         </div>
       </div>
 
-      {/* Right Side Jury Live Demonstration Controls for Phone Preview */}
       <div className="lg:col-span-6 space-y-5">
         <div className="glass-surface rounded-2xl p-6 space-y-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900">اختبار تفاعل هاتف ولي الأمر لحظياً</h2>
             <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-              جرّب إطلاق السيناريوهات التالية وشاهد استجابة شاشة هاتف ولي الأمر والصوت والتنبيه التلقائي في نفس اللحظة
+              جرّب إطلاق السيناريوهات التالية وشاهد استجابة شاشة هاتف ولي الأمر والواصلة الحية والصوت التلقائي في نفس اللحظة
             </p>
           </div>
 
@@ -516,13 +679,13 @@ export const ParentPhoneView: React.FC<ParentPhoneViewProps> = ({
         </div>
 
         <div className="glass-surface rounded-2xl p-6 space-y-3">
-          <h3 className="text-sm font-bold text-slate-900">عزل الصلاحيات والخصوصية</h3>
+          <h3 className="text-sm font-bold text-slate-900">التتبع الفعلي بالمشي داخل قاعة التقييم</h3>
           <div className="space-y-2.5 text-xs text-slate-600 leading-relaxed">
             <p>
-              عند مسح ولي الأمر لكود QR بكاميرا هاتفه الحقيقي، يفتح الرابط مباشرة في وضع المتابعة المعزول دون إظهار أي لوحات تحكم إدارية أو بيانات لأطفال آخرين
+              اترك اللاب توب على طاولة اللجنة، امسح الكود بهاتفك ثم اضغط تفعيل التتبع الفعلي بالحركة والصوت ثم معايرة نقطة الصفر هنا
             </p>
             <p>
-              يتم استلام التحديثات والإنذارات لحظياً عبر المزامنة المباشرة، ويتوقف صوت الإنذار والاهتزاز تلقائياً فور عودة الطفل داخل دائرة الأمان
+              عند المشي بعيداً عن اللاب توب لمسافة 6 أمتار تتمدد الواصلة الحية وينطلق الإنذار على الشاشتين، وعند الالتفاف والعودة يتوقف الإنذار تلقائياً
             </p>
           </div>
         </div>

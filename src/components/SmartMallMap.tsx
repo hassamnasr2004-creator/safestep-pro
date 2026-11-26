@@ -69,12 +69,15 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
     return nodes;
   }, [band.trail]);
 
-  const tetherColor =
-    statusLevel === 'critical'
-      ? '#DC2626'
-      : statusLevel === 'warning'
-        ? '#D97706'
-        : '#0D9488';
+  const isBreached =
+    band.distanceMeters > band.safeRadius ||
+    band.activeAlerts.some((a) => a.type === 'EXIT_GATE_ALERT' || a.type === 'TAMPER_LOCK_ALERT');
+
+  const tetherColor = isBreached
+    ? '#DC2626'
+    : statusLevel === 'warning'
+      ? '#D97706'
+      : '#0D9488';
 
   const tetherMidpoint: Point = {
     x: (band.parentPos.x + band.childPos.x) / 2,
@@ -82,15 +85,14 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
   };
 
   // Keep floating midpoint label cleanly inside viewBox
-  const clampedMidX = Math.max(115, Math.min(MALL_WIDTH - 115, tetherMidpoint.x));
-  const clampedMidY = Math.max(66, Math.min(MALL_HEIGHT - 56, tetherMidpoint.y - 18));
+  const clampedMidX = Math.max(145, Math.min(MALL_WIDTH - 145, tetherMidpoint.x));
+  const clampedMidY = Math.max(70, Math.min(MALL_HEIGHT - 56, tetherMidpoint.y - 22));
 
-  const tetherStatusLabel =
-    statusLevel === 'critical'
-      ? 'خطر فوري'
-      : statusLevel === 'warning'
-        ? 'تجاوز النطاق'
-        : 'آمن';
+  const tetherStatusLabel = isBreached
+    ? 'تجاوز'
+    : statusLevel === 'warning'
+      ? 'قريب من الحد'
+      : 'متصل';
 
   const clientToSvgPoint = (clientX: number, clientY: number): Point | null => {
     const svg = svgRef.current;
@@ -138,14 +140,14 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
         <div className="flex items-center gap-2.5 min-w-0">
           <div
             className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-              statusLevel === 'critical'
+              isBreached
                 ? 'bg-red-50 text-red-600'
                 : statusLevel === 'warning'
                   ? 'bg-amber-50 text-amber-600'
                   : 'bg-teal-50 text-teal-700'
             }`}
           >
-            {statusLevel === 'safe' ? (
+            {statusLevel === 'safe' && !isBreached ? (
               <ShieldCheck className="w-4 h-4" strokeWidth={1.85} />
             ) : (
               <ShieldAlert className="w-4 h-4" strokeWidth={1.85} />
@@ -167,7 +169,7 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
           {!readOnly && !compact && (
             <span className="hidden sm:flex items-center gap-1 text-slate-500">
               <Hand className="w-3.5 h-3.5 text-slate-400" strokeWidth={1.75} />
-              اسحب أيقونة الطفل أو ولي الأمر مباشرة
+              اسحب أيقونة السوار أو ولي الأمر مباشرة
             </span>
           )}
         </div>
@@ -205,15 +207,15 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
             </filter>
 
             <radialGradient id="safeRingFill" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#0D9488" stopOpacity="0.03" />
-              <stop offset="75%" stopColor="#0D9488" stopOpacity="0.08" />
-              <stop offset="100%" stopColor="#0D9488" stopOpacity="0.17" />
+              <stop offset="0%" stopColor="#0D9488" stopOpacity="0.04" />
+              <stop offset="72%" stopColor="#0D9488" stopOpacity="0.10" />
+              <stop offset="100%" stopColor="#0D9488" stopOpacity="0.22" />
             </radialGradient>
 
             <radialGradient id="breachRingFill" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#DC2626" stopOpacity="0.02" />
-              <stop offset="80%" stopColor="#DC2626" stopOpacity="0.07" />
-              <stop offset="100%" stopColor="#DC2626" stopOpacity="0.16" />
+              <stop offset="0%" stopColor="#DC2626" stopOpacity="0.03" />
+              <stop offset="76%" stopColor="#DC2626" stopOpacity="0.09" />
+              <stop offset="100%" stopColor="#DC2626" stopOpacity="0.20" />
             </radialGradient>
 
             <linearGradient id="atriumFloor" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -222,8 +224,8 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
             </linearGradient>
 
             <linearGradient id="trailGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#0D9488" stopOpacity="0.3" />
-              <stop offset="100%" stopColor={tetherColor} stopOpacity="0.92" />
+              <stop offset="0%" stopColor="#0D9488" stopOpacity="0.35" />
+              <stop offset="100%" stopColor={tetherColor} stopOpacity="0.95" />
             </linearGradient>
           </defs>
 
@@ -302,7 +304,6 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
 
             return (
               <g key={sector.id} filter="url(#wingShadow)">
-                {/* 2.5D Extruded Base Lip */}
                 <rect
                   x={sector.x}
                   y={sector.y + 5}
@@ -312,7 +313,6 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
                   fill="#CBD5E1"
                   fillOpacity="0.55"
                 />
-                {/* Top Architectural Floor Surface */}
                 <rect
                   x={sector.x}
                   y={sector.y}
@@ -325,7 +325,6 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
                   className="transition-colors duration-300"
                 />
 
-                {/* Architectural Interior Floorplan Micro-Details per Sector */}
                 {sector.id === 'kids_arena' && (
                   <g opacity="0.45" stroke="#0D9488" strokeWidth="1" fill="none">
                     <circle cx={sector.x + 64} cy={sector.y + 128} r="28" strokeDasharray="3 4" />
@@ -359,7 +358,6 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
                   </g>
                 )}
 
-                {/* Sector Title */}
                 <text
                   x={sector.x + sector.w / 2}
                   y={isBooth ? sector.y + 39 : sector.y + 38}
@@ -394,7 +392,6 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
 
             return (
               <g key={gate.id}>
-                {/* Geo-fence 4m warning halo when triggered */}
                 {isGateAlert && (
                   <circle
                     cx={gate.x}
@@ -408,7 +405,6 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
                   />
                 )}
 
-                {/* Geo-Fence Security Threshold Line */}
                 <line
                   x1={gate.lineX1}
                   y1={gate.lineY1}
@@ -420,7 +416,6 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
                   className={isGateAlert ? 'animate-gate-laser' : ''}
                 />
 
-                {/* Gate Architectural Label */}
                 <g
                   transform={`translate(${
                     gate.id === 'gate_2'
@@ -467,10 +462,10 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
               cx={band.parentPos.x}
               cy={band.parentPos.y}
               r={safeRadiusPx}
-              fill={statusLevel === 'safe' ? 'url(#safeRingFill)' : 'url(#breachRingFill)'}
-              stroke={statusLevel === 'safe' ? '#0D9488' : tetherColor}
-              strokeWidth="2"
-              strokeDasharray="7 6"
+              fill={!isBreached && statusLevel === 'safe' ? 'url(#safeRingFill)' : 'url(#breachRingFill)'}
+              stroke={tetherColor}
+              strokeWidth="2.4"
+              strokeDasharray="8 6"
               className="transition-all duration-200"
             />
           </g>
@@ -478,121 +473,126 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
           {/* SIGNATURE ELEMENT 3: Child Footsteps Trail (Glowing Curved Path + Step Nodes) */}
           {band.trail.length > 1 && (
             <g>
-              {/* Soft outer glow */}
               <path
                 d={smoothTrail}
                 fill="none"
                 stroke={tetherColor}
-                strokeWidth="7"
-                strokeOpacity="0.14"
+                strokeWidth="8"
+                strokeOpacity="0.16"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-              {/* Main footsteps curve */}
               <path
                 d={smoothTrail}
                 fill="none"
                 stroke="url(#trailGradient)"
-                strokeWidth="3"
+                strokeWidth="3.2"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-              {/* Subtle step nodes along exact walked route */}
               {trailNodes.map((pt, index) => (
                 <circle
                   key={`${pt.x}-${pt.y}-${index}`}
                   cx={pt.x}
                   cy={pt.y}
-                  r="3.2"
+                  r="3.4"
                   fill="#FFFFFF"
                   stroke={tetherColor}
-                  strokeWidth="1.8"
-                  opacity="0.88"
+                  strokeWidth="1.9"
+                  opacity="0.9"
                 />
               ))}
             </g>
           )}
 
-          {/* SIGNATURE ELEMENT 2: Live Parent-Child Tether with Floating Glass Distance Readout */}
+          {/* SIGNATURE ELEMENT 2: PROMINENT LIVE TETHER (الواصلة الحية بين الأب والأسورة) */}
           <g>
-            {/* Under-glow */}
+            {/* Outer ambient glow beam */}
             <line
               x1={band.parentPos.x}
               y1={band.parentPos.y}
               x2={band.childPos.x}
               y2={band.childPos.y}
               stroke={tetherColor}
-              strokeWidth="6"
-              strokeOpacity="0.16"
+              strokeWidth={isBreached ? 13 : 10}
+              strokeOpacity={isBreached ? 0.24 : 0.18}
               strokeLinecap="round"
             />
-            {/* Animated directional tether */}
+            {/* Inner solid rail for unmistakable continuity */}
             <line
               x1={band.parentPos.x}
               y1={band.parentPos.y}
               x2={band.childPos.x}
               y2={band.childPos.y}
               stroke={tetherColor}
-              strokeWidth="2.8"
-              strokeDasharray="7 5"
+              strokeWidth="2.2"
+              strokeOpacity="0.45"
+              strokeLinecap="round"
+            />
+            {/* Animated flowing signal tether */}
+            <line
+              x1={band.parentPos.x}
+              y1={band.parentPos.y}
+              x2={band.childPos.x}
+              y2={band.childPos.y}
+              stroke={tetherColor}
+              strokeWidth="4.2"
+              strokeDasharray="9 7"
               strokeLinecap="round"
               className="animate-tether-flow"
             />
 
-            {/* Floating Frosted Glass Midpoint Distance Capsule */}
+            {/* High-Clarity Frosted Glass Midpoint Badge: الواصلة النشطة */}
             <g transform={`translate(${clampedMidX}, ${clampedMidY})`} filter="url(#pinShadow)">
               <rect
-                x="-82"
-                y="-15"
-                width="164"
-                height="30"
-                rx="15"
-                fill="rgba(255,255,255,0.94)"
+                x="-126"
+                y="-17"
+                width="252"
+                height="34"
+                rx="17"
+                fill={isBreached ? 'rgba(220,38,38,0.96)' : 'rgba(255,255,255,0.96)'}
                 stroke={tetherColor}
-                strokeWidth="1.5"
+                strokeWidth="2"
               />
               <text
                 x="0"
-                y="4.5"
+                y="5"
                 textAnchor="middle"
-                fill={tetherColor}
-                fontSize="12"
+                fill={isBreached ? '#FFFFFF' : tetherColor}
+                fontSize="12.5"
                 fontWeight="700"
                 style={{ fontFamily: 'Alexandria, sans-serif' }}
               >
-                {`${band.distanceMeters.toFixed(1)} متر · ${tetherStatusLabel}`}
+                {`الواصلة النشطة: ${band.distanceMeters.toFixed(1)} متر · ${tetherStatusLabel}`}
               </text>
             </g>
           </g>
 
-          {/* PARENT BEACON (Draggable in Booth Mode) */}
+          {/* PARENT BEACON (ولي الأمر) */}
           <g
             transform={`translate(${band.parentPos.x}, ${band.parentPos.y})`}
             onPointerDown={(e) => handlePointerDownPin('parent', e)}
             style={{ cursor: readOnly ? 'default' : dragging === 'parent' ? 'grabbing' : 'grab' }}
           >
-            {/* Interactive larger hit target */}
             <circle r="28" fill="transparent" />
-            <circle r="21" fill="#0F172A" fillOpacity="0.09" />
+            <circle r="22" fill="#0F172A" fillOpacity="0.1" />
             <circle
-              r="15"
+              r="15.5"
               fill="#0F172A"
               stroke="#FFFFFF"
               strokeWidth="3"
               filter="url(#pinShadow)"
             />
-            {/* Parent Beacon geometric glyph */}
             <circle cx="0" cy="-3.2" r="3" fill="#FFFFFF" />
             <path d="M -5.5 5.5 C -5.5 1.8, 5.5 1.8, 5.5 5.5" fill="#FFFFFF" />
-            {/* Label underneath */}
-            <g transform="translate(0, 29)">
-              <rect x="-34" y="-10" width="68" height="20" rx="6" fill="#0F172A" fillOpacity="0.88" />
+            <g transform="translate(0, 30)">
+              <rect x="-36" y="-11" width="72" height="22" rx="7" fill="#0F172A" fillOpacity="0.92" />
               <text
                 x="0"
                 y="3.5"
                 textAnchor="middle"
                 fill="#FFFFFF"
-                fontSize="10.5"
+                fontSize="11"
                 fontWeight="600"
                 style={{ fontFamily: 'Alexandria, sans-serif' }}
               >
@@ -601,33 +601,30 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
             </g>
           </g>
 
-          {/* CHILD WRISTBAND PIN (Draggable in Booth Mode) */}
+          {/* CHILD WRISTBAND PIN (سوار الطفل) */}
           <g
             transform={`translate(${band.childPos.x}, ${band.childPos.y})`}
             onPointerDown={(e) => handlePointerDownPin('child', e)}
             style={{ cursor: readOnly ? 'default' : dragging === 'child' ? 'grabbing' : 'grab' }}
           >
-            {/* Interactive larger hit target */}
             <circle r="30" fill="transparent" />
-            {/* Radar pulse ring ONLY when alert is active */}
-            {statusLevel !== 'safe' && (
+            {(isBreached || statusLevel !== 'safe') && (
               <circle
-                r="22"
+                r="23"
                 fill="none"
                 stroke={tetherColor}
-                strokeWidth="2.5"
+                strokeWidth="2.8"
                 className="animate-radar-wave"
               />
             )}
-            <circle r="22" fill={tetherColor} fillOpacity="0.16" />
+            <circle r="23" fill={tetherColor} fillOpacity="0.18" />
             <circle
-              r="16"
-              fill={statusLevel === 'safe' ? edition.strapColor : tetherColor}
+              r="16.5"
+              fill={!isBreached && statusLevel === 'safe' ? edition.strapColor : tetherColor}
               stroke="#FFFFFF"
               strokeWidth="3.2"
               filter="url(#pinShadow)"
             />
-            {/* Child Initial / Wristband Center Dot */}
             <text
               x="0"
               y="4.5"
@@ -639,18 +636,17 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
             >
               {band.childName.trim().charAt(0) || 'ط'}
             </text>
-            {/* Child Name Tag */}
-            <g transform="translate(0, -29)">
+            <g transform="translate(0, -31)">
               <rect
-                x="-46"
+                x="-62"
                 y="-11"
-                width="92"
+                width="124"
                 height="22"
                 rx="7"
                 fill="#FFFFFF"
-                fillOpacity="0.95"
+                fillOpacity="0.96"
                 stroke={tetherColor}
-                strokeWidth="1.4"
+                strokeWidth="1.6"
               />
               <text
                 x="0"
@@ -661,7 +657,7 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
                 fontWeight="700"
                 style={{ fontFamily: 'Alexandria, sans-serif' }}
               >
-                {band.childName}
+                {`سوار ${band.childName}`}
               </text>
             </g>
           </g>
@@ -678,7 +674,7 @@ export const SmartMallMap: React.FC<SmartMallMapProps> = ({
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full bg-[#0D9488]" />
-              نطاق الأمان والمسار
+              سوار الطفل والواصلة الحية
             </span>
             <span className="flex items-center gap-1.5">
               <span className="w-4 h-0.5 bg-[#DC2626] rounded-full" />

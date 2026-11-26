@@ -7,6 +7,7 @@ import {
   DEFAULT_CHILD_POS,
   DEFAULT_PARENT_POS,
   PIXELS_PER_METER,
+  ZERO_CALIBRATED_OFFSET,
   clampToMall,
   createNewBandSession,
   evaluateBandSession,
@@ -15,12 +16,19 @@ import {
   BandSession,
   EditionId,
   MainTab,
+  MobileRole,
   Point,
   SafeStepStore,
   ScenarioId,
   SyncStatus,
 } from './types/safestep';
 import { audioAlertEngine } from './utils/audioAlert';
+import {
+  MotionTelemetry,
+  StepDeltaEvent,
+  WalkDirectionMode,
+  physicalMotionTracker,
+} from './utils/physicalMotion';
 import { loadStore, saveSingleBandToCache, saveStore } from './utils/storage';
 import { syncEngine } from './utils/syncEngine';
 
@@ -31,11 +39,23 @@ const NAV_TABS: Array<{ id: MainTab; label: string }> = [
   { id: 'jury', label: 'ملخص الفكرة للجنة' },
 ];
 
-function readScannedBandParam(): string | null {
+interface ScannedTarget {
+  bandId: string;
+  role: MobileRole;
+}
+
+function readScannedTarget(): ScannedTarget | null {
   if (typeof window === 'undefined') return null;
   const params = new URLSearchParams(window.location.search);
-  const val = params.get('p');
-  return val && val.trim().length > 0 ? val.trim() : null;
+  const pVal = params.get('p');
+  if (pVal && pVal.trim().length > 0) {
+    return { bandId: pVal.trim(), role: 'parent' };
+  }
+  const wVal = params.get('w');
+  if (wVal && wVal.trim().length > 0) {
+    return { bandId: wVal.trim(), role: 'wristband' };
+  }
+  return null;
 }
 
 function interpolatePath(waypoints: Point[], t: number): Point {
@@ -43,7 +63,6 @@ function interpolatePath(waypoints: Point[], t: number): Point {
   if (waypoints.length === 1 || t <= 0) return waypoints[0];
   if (t >= 1) return waypoints[waypoints.length - 1];
 
-  // Compute segment lengths for constant-speed motion
   const lengths: number[] = [];
   let total = 0;
   for (let i = 0; i < waypoints.length - 1; i++) {
@@ -73,7 +92,9 @@ function interpolatePath(waypoints: Point[], t: number): Point {
 }
 
 export default function App() {
-  const [scannedBandId, setScannedBandId] = useState<string | null>(() => readScannedBandParam());
+  const [scannedTarget, setScannedTarget] = useState<ScannedTarget | null>(() =>
+    readScannedTarget()
+  );
   const [activeTab, setActiveTab] = useState<MainTab>('booth');
   const [store, setStore] = useState<SafeStepStore>(() => loadStore());
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('connecting');
@@ -81,24 +102,43 @@ export default function App() {
   const [showIssueModal, setShowIssueModal] = useState<boolean>(false);
   const [runningScenario, setRunningScenario] = useState<ScenarioId | null>(null);
   const [recoveryToast, setRecoveryToast] = useState<string | null>(null);
+  const [motionTelemetry, setMotionTelemetry] = useState<MotionTelemetry>(() =>
+    physicalMotionTracker.getTelemetry()
+  );
 
-  // Standalone phone band state (populated from local cache & live MQTT retained topic)
+  // Standalone mobile band state (populated from local cache & live MQTT retained topic)
   const [remoteBand, setRemoteBand] = useState<BandSession | null>(() => {
-    const paramId = readScannedBandParam();
-    if (!paramId) return null;
+    const target = readScannedTarget();
+    if (!target) return null;
     const cached = loadStore();
-    return cached.bands[paramId] ?? null;
+    return cached.bands[target.bandId] ?? null;
   });
 
   const storeRef = useRef<SafeStepStore>(store);
   storeRef.current = store;
+
+  const remoteBandRef = useRef<BandSession | null>(remoteBand);
+  remoteBandRef.current = remoteBand;
 
   const animFrameRef = useRef<number | null>(null);
   const lastPublishAtRef = useRef<number>(0);
   const lastHandledRecoveryRef = useRef<number>(0);
   const recoveryTimerRef = useRef<number | null>(null);
 
-  // Cancel any running corridor animation safely
+  const scannedBandId = scannedTarget?.bandId ?? null;
+  const scannedRole: MobileRole = scannedTarget?.role ?? 'parent';
+
+  // Stable list of active band IDs for two-way Booth MQTT subscription
+  const activeBandIdsKey = useMemo(
+    () =>
+      Object.values(store.bands)
+        .filter((b) => b.status === 'active')
+        .map((b) => b.bandId)
+        .sort()
+        .join(','),
+    [store.bands]
+  );
+
   const cancelAnimation = useCallback(() => {
     if (animFrameRef.current !== null) {
       window.cancelAnimationFrame(animFrameRef.current);
@@ -114,20 +154,19 @@ export default function App() {
     }
   }, [store, scannedBandId]);
 
-  // Initialize MQTT + BroadcastChannel Sync Engine
+  // Initialize TWO-WAY MQTT + BroadcastChannel Sync Engine
   useEffect(() => {
     const unsubStatus = syncEngine.onStatusChange((status) => {
       setSyncStatus(status);
     });
 
     if (scannedBandId) {
-      // Scanned Smartphone Mode: Subscribe ONLY to this specific child's band
+      // Scanned Smartphone Mode (?p= or ?w=): Subscribe ONLY to this child's band
       const unsubBand = syncEngine.subscribeBand(scannedBandId, (incoming) => {
         setRemoteBand(incoming);
         saveSingleBandToCache(incoming);
       });
 
-      // Also listen for localStorage updates in same browser
       const handleStorage = (e: StorageEvent) => {
         if (e.key === 'safestep_master_v1' && e.newValue) {
           try {
@@ -148,26 +187,30 @@ export default function App() {
       };
     }
 
-    // Booth Control Mode: Publish currently active band once MQTT connects so newly scanned phones get retained state
-    const unsubGlobal = syncEngine.subscribeAll((incoming) => {
-      setStore((prev) => {
-        const existing = prev.bands[incoming.bandId];
-        if (existing && existing.updatedAt >= incoming.updatedAt) return prev;
-        return {
-          ...prev,
-          bands: {
-            ...prev.bands,
-            [incoming.bandId]: incoming,
-          },
-        };
-      });
-    });
+    // Booth Mode (/): Explicitly subscribe to EVERY active band topic over MQTT so
+    // real physical walking updates from Smartphones arrive live on the Laptop Screen!
+    const ids = activeBandIdsKey ? activeBandIdsKey.split(',').filter(Boolean) : [];
+    const unsubs = ids.map((id) =>
+      syncEngine.subscribeBand(id, (incoming) => {
+        setStore((prev) => {
+          const existing = prev.bands[incoming.bandId];
+          if (existing && existing.updatedAt >= incoming.updatedAt) return prev;
+          return {
+            ...prev,
+            bands: {
+              ...prev.bands,
+              [incoming.bandId]: incoming,
+            },
+          };
+        });
+      })
+    );
 
     return () => {
       unsubStatus();
-      unsubGlobal();
+      unsubs.forEach((fn) => fn());
     };
-  }, [scannedBandId]);
+  }, [scannedBandId, activeBandIdsKey]);
 
   // Publish initial retained snapshot of active bands when MQTT connects in Booth Mode
   useEffect(() => {
@@ -180,11 +223,128 @@ export default function App() {
     }
   }, [scannedBandId, syncStatus]);
 
+  // Heartbeat for 2nd Wristband Phone (?w=BAND_ID) so Booth & Phone 1 automatically switch to Dual-Phone mode
+  useEffect(() => {
+    if (!scannedTarget || scannedTarget.role !== 'wristband') return;
+
+    const sendHeartbeat = () => {
+      const current = remoteBandRef.current;
+      if (!current || current.status !== 'active') return;
+      const stamped: BandSession = {
+        ...current,
+        wristbandActiveAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      setRemoteBand(stamped);
+      saveSingleBandToCache(stamped);
+      syncEngine.publishBand(stamped);
+    };
+
+    const initialTimer = window.setTimeout(sendHeartbeat, 1200);
+    const interval = window.setInterval(sendHeartbeat, 18000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
+  }, [scannedTarget]);
+
+  // Real Physical Walking Step Handler (Two-Way MQTT Sync on every detected physical step!)
+  const handlePhysicalStep = useCallback(
+    (evt: StepDeltaEvent) => {
+      if (!scannedTarget) return;
+      const current = remoteBandRef.current;
+      if (!current || current.status !== 'active') return;
+
+      const now = Date.now();
+      const isDualPhoneActive = Boolean(
+        current.wristbandActiveAt && now - current.wristbandActiveAt < 60000
+      );
+
+      // Determine which pin moves:
+      // - 2-Phone Mode: ?w= moves Child Wristband Pin, ?p= moves Parent Pin -> live relative separation!
+      // - 1-Phone (?p=) + Stationary Laptop Booth: ?p= updates Child separation vector relative to Booth/Parent anchor!
+      const moveParentPin = scannedTarget.role === 'parent' && isDualPhoneActive;
+      const movingPoint = moveParentPin ? current.parentPos : current.childPos;
+      const anchorPoint = moveParentPin ? current.childPos : current.parentPos;
+
+      let nextPos: Point;
+      if (evt.modeUsed === 'inward') {
+        const vx = anchorPoint.x - movingPoint.x;
+        const vy = anchorPoint.y - movingPoint.y;
+        const distPx = Math.hypot(vx, vy);
+        const stepPx = evt.strideMeters * PIXELS_PER_METER;
+        if (distPx <= stepPx + ZERO_CALIBRATED_OFFSET.x) {
+          nextPos = clampToMall({
+            x: anchorPoint.x + ZERO_CALIBRATED_OFFSET.x,
+            y: anchorPoint.y + ZERO_CALIBRATED_OFFSET.y,
+          });
+        } else {
+          nextPos = clampToMall({
+            x: movingPoint.x + (vx / distPx) * stepPx,
+            y: movingPoint.y + (vy / distPx) * stepPx,
+          });
+        }
+      } else {
+        nextPos = clampToMall({
+          x: movingPoint.x + evt.dxMeters * PIXELS_PER_METER,
+          y: movingPoint.y + evt.dyMeters * PIXELS_PER_METER,
+        });
+      }
+
+      const roleTimestampPatch =
+        scannedTarget.role === 'wristband'
+          ? { wristbandActiveAt: now }
+          : { parentPhoneActiveAt: now };
+
+      const nextBand = moveParentPin
+        ? evaluateBandSession(
+            current,
+            {
+              parentPos: nextPos,
+              ...roleTimestampPatch,
+            },
+            { appendTrail: false }
+          )
+        : evaluateBandSession(
+            current,
+            {
+              childPos: nextPos,
+              stepCount: current.stepCount + evt.stepIncrement,
+              ...roleTimestampPatch,
+            },
+            { appendTrail: true }
+          );
+
+      setRemoteBand(nextBand);
+      saveSingleBandToCache(nextBand);
+      // Immediately publish every physical step back over MQTT so the Laptop Booth reflects it live!
+      syncEngine.publishBand(nextBand);
+    },
+    [scannedTarget]
+  );
+
+  // Bind PhysicalMotionTracker callbacks while in standalone mobile mode
+  useEffect(() => {
+    if (!scannedTarget) {
+      physicalMotionTracker.stop();
+      return;
+    }
+
+    physicalMotionTracker.setCallbacks(handlePhysicalStep, (t) => {
+      setMotionTelemetry(t);
+    });
+
+    return () => {
+      physicalMotionTracker.stop();
+    };
+  }, [scannedTarget, handlePhysicalStep]);
+
   // Clean up animation and audio on unmount
   useEffect(() => {
     return () => {
       cancelAnimation();
       audioAlertEngine.stopAlarm();
+      physicalMotionTracker.stop();
       if (recoveryTimerRef.current !== null) {
         window.clearTimeout(recoveryTimerRef.current);
       }
@@ -212,11 +372,10 @@ export default function App() {
         activeBand.lastAlertTimestamp || activeBand.updatedAt
       );
     } else {
-      // AUTO-CLEAR RULE: Immediately silence Web Audio siren & vibration when safe!
+      // AUTO-CLEAR RULE: Immediately silence Web Audio siren & vibration when safe
       audioAlertEngine.stopAlarm();
     }
 
-    // Trigger 4-second Emerald Auto-Recovery Toast whenever a fresh recovery occurs
     if (
       activeBand.lastRecoveredAt > 0 &&
       activeBand.lastRecoveredAt > lastHandledRecoveryRef.current &&
@@ -249,6 +408,16 @@ export default function App() {
       updater: (prev: BandSession) => BandSession,
       options?: { forcePublish?: boolean }
     ) => {
+      if (scannedBandId) {
+        const current = remoteBandRef.current;
+        if (!current || current.status !== 'active') return;
+        const nextBand = updater(current);
+        setRemoteBand(nextBand);
+        saveSingleBandToCache(nextBand);
+        syncEngine.publishBand(nextBand);
+        return;
+      }
+
       setStore((prev) => {
         if (!prev.activeBandId) return prev;
         const current = prev.bands[prev.activeBandId];
@@ -268,8 +437,22 @@ export default function App() {
         };
       });
     },
-    [publishBandState]
+    [scannedBandId, publishBandState]
   );
+
+  // Direct onClick handler for iOS Safari & Android Chrome:
+  // Requests DeviceMotion + DeviceOrientation permissions, unlocks Web Audio, requests Notifications, starts tracking
+  const handleActivatePhysicalTracking = useCallback(async () => {
+    const audioOk = await audioAlertEngine.unlock();
+    setAudioEnabled(audioOk);
+    await physicalMotionTracker.start();
+    setMotionTelemetry(physicalMotionTracker.getTelemetry());
+  }, []);
+
+  const handleSetWalkDirection = useCallback((mode: WalkDirectionMode) => {
+    physicalMotionTracker.setDirectionMode(mode);
+    setMotionTelemetry(physicalMotionTracker.getTelemetry());
+  }, []);
 
   // Audio unlock / toggle handlers
   const handleUnlockAudio = useCallback(async () => {
@@ -286,6 +469,42 @@ export default function App() {
       setAudioEnabled(false);
     }
   }, [audioEnabled]);
+
+  // One-Tap Zero Calibration (Sets separation to 0.5m next to Laptop/Booth, resets heading & trail, silences audio)
+  const handleCalibrateZero = useCallback(() => {
+    cancelAnimation();
+    audioAlertEngine.stopAlarm();
+    physicalMotionTracker.calibrateZero();
+    setMotionTelemetry(physicalMotionTracker.getTelemetry());
+    setRecoveryToast(null);
+
+    mutateActiveBand(
+      (prev) => {
+        const baseParent = { ...DEFAULT_PARENT_POS };
+        const zeroChild = clampToMall({
+          x: baseParent.x + ZERO_CALIBRATED_OFFSET.x,
+          y: baseParent.y + ZERO_CALIBRATED_OFFSET.y,
+        });
+        return evaluateBandSession(
+          prev,
+          {
+            parentPos: baseParent,
+            childPos: zeroChild,
+            trail: [zeroChild],
+            stepCount: 0,
+            tamperActive: false,
+            claspLocked: true,
+            leftBehindActive: false,
+            activeAlerts: [],
+            lastRecoveredAt: 0,
+            recoveredMessage: '',
+          },
+          { appendTrail: false }
+        );
+      },
+      { forcePublish: true }
+    );
+  }, [cancelAnimation, mutateActiveBand]);
 
   // Issue new wristband
   const handleIssueBand = useCallback(
@@ -334,7 +553,6 @@ export default function App() {
     [cancelAnimation, mutateActiveBand]
   );
 
-  // 8-way directional step pad (+1.5m deterministic steps)
   const handleStepChild = useCallback(
     (dxMeters: number, dyMeters: number) => {
       cancelAnimation();
@@ -391,7 +609,6 @@ export default function App() {
     );
   }, [mutateActiveBand]);
 
-  // Reset trail & alerts cleanly for repeatable Jury Demos (20x in a row with zero stuck audio)
   const handleResetTrail = useCallback(() => {
     cancelAnimation();
     audioAlertEngine.stopAlarm();
@@ -434,7 +651,6 @@ export default function App() {
       const tick = (now: number) => {
         const elapsed = now - startTime;
         const rawT = Math.min(1, elapsed / durationMs);
-        // Smooth ease-in-out cubic curve
         const easedT =
           rawT < 0.5 ? 4 * rawT * rawT * rawT : 1 - Math.pow(-2 * rawT + 2, 3) / 2;
 
@@ -486,11 +702,10 @@ export default function App() {
       }
 
       if (scenario === 'safe_walk_kids') {
-        // Move parent near central-east corridor, child walks smoothly into Kids Arena staying inside Safe Radius
         const pStart = current.parentPos;
-        const pTarget: Point = { x: 610, y: 240 };
+        const pTarget: Point = { x: 645, y: 215 };
         const cStart = current.childPos;
-        const safeDeltaPx = Math.max(70, Math.min(current.safeRadius * PIXELS_PER_METER * 0.65, 130));
+        const safeDeltaPx = Math.max(24, Math.min(current.safeRadius * PIXELS_PER_METER * 0.65, 110));
         const cTarget: Point = clampToMall({
           x: pTarget.x + safeDeltaPx * 0.78,
           y: pTarget.y - safeDeltaPx * 0.58,
@@ -508,7 +723,7 @@ export default function App() {
 
         runCorridorAnimation(
           scenario,
-          [cStart, { x: 560, y: 280 }, { x: 650, y: 220 }, cTarget],
+          [cStart, { x: 560, y: 270 }, { x: 650, y: 220 }, cTarget],
           [pStart, pTarget],
           2400
         );
@@ -516,32 +731,36 @@ export default function App() {
       }
 
       if (scenario === 'breach_radius') {
-        // Walk child clearly beyond safeRadius into deep Kids Arena / East Wing
         const pPos = current.parentPos;
         const cStart = current.childPos;
-        const breachDistPx = current.safeRadius * PIXELS_PER_METER + 78;
-        // Aim towards North-East or South-West depending on room available
-        const targetX = pPos.x < 520 ? Math.min(895, pPos.x + breachDistPx) : Math.max(105, pPos.x - breachDistPx);
-        const targetY = pPos.y > 260 ? Math.max(115, pPos.y - 140) : Math.min(510, pPos.y + 150);
+        const breachDistPx = current.safeRadius * PIXELS_PER_METER + 68;
+        const targetX =
+          pPos.x < 520
+            ? Math.min(895, pPos.x + breachDistPx)
+            : Math.max(105, pPos.x - breachDistPx);
+        const targetY =
+          pPos.y > 260 ? Math.max(115, pPos.y - 110) : Math.min(510, pPos.y + 120);
 
         runCorridorAnimation(
           scenario,
           [
             cStart,
-            { x: (cStart.x + targetX) / 2, y: 295 },
+            { x: (cStart.x + targetX) / 2, y: (cStart.y + targetY) / 2 },
             { x: targetX, y: targetY },
           ],
           null,
-          2500
+          2400
         );
         return;
       }
 
       if (scenario === 'return_to_parent') {
-        // Walk child smoothly back directly next to parent -> crosses inside safeRadius -> AUTO-CLEARS alarm & silences phone!
         const cStart = current.childPos;
         const pPos = current.parentPos;
-        const reunionPos = clampToMall({ x: pPos.x + 36, y: pPos.y - 16 });
+        const reunionPos = clampToMall({
+          x: pPos.x + ZERO_CALIBRATED_OFFSET.x * 2,
+          y: pPos.y - 6,
+        });
 
         runCorridorAnimation(
           scenario,
@@ -551,7 +770,7 @@ export default function App() {
             reunionPos,
           ],
           null,
-          2200,
+          2100,
           () => {
             mutateActiveBand(
               (prev) =>
@@ -564,7 +783,6 @@ export default function App() {
       }
 
       if (scenario === 'approach_exit') {
-        // Smooth corridor walk right up to Gate 1 (within ~2m of North laser threshold!)
         const cStart = current.childPos;
         const gate1Approach: Point = { x: 500, y: 58 };
         runCorridorAnimation(
@@ -577,7 +795,6 @@ export default function App() {
       }
 
       if (scenario === 'left_behind') {
-        // Child stays unattended in Kids Arena while Parent walks away toward Food Court
         const cStart = current.childPos;
         const kidsSpot: Point = { x: 760, y: 165 };
         const pStart = current.parentPos;
@@ -610,7 +827,10 @@ export default function App() {
         return { ok: false, error: 'يرجى تأكيد إحكام القفل الأمني أولاً' };
       }
       if (pin !== target.returnPin) {
-        return { ok: false, error: 'رمز التسليم غير مطابق — يرجى التأكد من الرقم الظاهر في هاتف ولي الأمر' };
+        return {
+          ok: false,
+          error: 'رمز التسليم غير مطابق — يرجى التأكد من الرقم الظاهر في هاتف ولي الأمر',
+        };
       }
 
       cancelAnimation();
@@ -627,7 +847,6 @@ export default function App() {
         updatedAt: Date.now(),
       };
 
-      // Publish retained ended state so any connected parent smartphone immediately shows graceful completion card
       syncEngine.publishBand(endedSession);
 
       setStore((prev) => {
@@ -650,7 +869,8 @@ export default function App() {
 
   const handleExitStandalone = useCallback(() => {
     audioAlertEngine.stopAlarm();
-    setScannedBandId(null);
+    physicalMotionTracker.stop();
+    setScannedTarget(null);
     if (typeof window !== 'undefined') {
       const cleanUrl = `${window.location.origin}${window.location.pathname}`;
       window.history.replaceState({}, '', cleanUrl);
@@ -659,19 +879,25 @@ export default function App() {
   }, []);
 
   // =========================================================================
-  // RENDER MODE A: SCANNED PARENT SMARTPHONE MODE (?p=BAND_ID)
-  // Strict Role Isolation — NO admin navbar, NO booth controls, ONLY this child
+  // RENDER MODE A: SCANNED SMARTPHONE MODE (?p=BAND_ID or ?w=BAND_ID)
+  // Strict Role Isolation + Two-Way Real Physical Walking Engine
   // =========================================================================
   if (scannedBandId) {
     return (
       <ParentPhoneView
         band={activeBand}
         requestedBandId={scannedBandId}
+        mobileRole={scannedRole}
         standaloneMode
         syncStatus={syncStatus}
         audioEnabled={audioEnabled}
         onUnlockAudio={handleUnlockAudio}
         onToggleAudio={handleToggleAudio}
+        motionTelemetry={motionTelemetry}
+        onActivatePhysicalTracking={handleActivatePhysicalTracking}
+        onSetWalkDirection={handleSetWalkDirection}
+        onCalibrateZero={handleCalibrateZero}
+        onUpdateSafeRadius={handleUpdateSafeRadius}
         recoveryToast={recoveryToast}
         onExitStandalone={handleExitStandalone}
       />
@@ -685,10 +911,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Persistent Crystal-Clear Frosted-Glass Top Navigation Bar (Strict 3-Zone Contract) */}
+      {/* Persistent Crystal-Clear Frosted-Glass Top Navigation Bar */}
       <header className="no-print sticky top-0 z-40 bg-white/80 backdrop-blur-xl border-b border-white/90 shadow-[0_4px_24px_rgba(15,23,42,0.04)]">
         <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-8">
-          {/* Zone 1: Single-line Brand Wordmark */}
           <button
             type="button"
             onClick={() => setActiveTab('booth')}
@@ -697,7 +922,6 @@ export default function App() {
             SafeStep Booth
           </button>
 
-          {/* Zone 2: 4 Clean Single-Line Navigation Tabs */}
           <nav
             aria-label="التنقل الرئيسي"
             className="hidden md:flex items-center gap-6 overflow-x-auto"
@@ -724,7 +948,6 @@ export default function App() {
             })}
           </nav>
 
-          {/* Zone 3: 1 Primary Action Button */}
           <div className="shrink-0">
             <button
               type="button"
@@ -739,7 +962,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Mobile Tab Strip (Strictly single-line scrollable tabs for narrow screens) */}
         <div className="md:hidden border-t border-slate-200/60 px-3 py-2 flex items-center gap-1.5 overflow-x-auto">
           {NAV_TABS.map((tab) => {
             const isActive = activeTab === tab.id;
@@ -761,7 +983,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Content Viewport */}
       <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
         {activeTab === 'booth' && (
           <BoothControlView
@@ -786,6 +1007,7 @@ export default function App() {
             onConfirmClaspLock={handleConfirmClaspLock}
             onAcknowledgeLeftBehind={handleAcknowledgeLeftBehind}
             onResetTrail={handleResetTrail}
+            onCalibrateZero={handleCalibrateZero}
             onCheckoutBand={handleCheckoutBand}
             audioEnabled={audioEnabled}
             onToggleAudio={handleToggleAudio}
@@ -803,6 +1025,8 @@ export default function App() {
             audioEnabled={audioEnabled}
             onUnlockAudio={handleUnlockAudio}
             onToggleAudio={handleToggleAudio}
+            onCalibrateZero={handleCalibrateZero}
+            onUpdateSafeRadius={handleUpdateSafeRadius}
             recoveryToast={recoveryToast}
             onRunScenario={handleRunScenario}
             onConfirmClaspLock={handleConfirmClaspLock}
@@ -826,7 +1050,6 @@ export default function App() {
         {activeTab === 'jury' && <JurySummaryView />}
       </main>
 
-      {/* Quiet Clean Footer (Hidden in Print) */}
       <footer className="no-print border-t border-slate-200/70 bg-white/40 py-4 px-6 mt-auto">
         <div className="max-w-[1440px] mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
           <span>SafeStep Booth · بوث السوار الذكي لحماية الأطفال في المولات</span>

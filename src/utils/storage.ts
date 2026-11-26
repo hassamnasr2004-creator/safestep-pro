@@ -14,7 +14,7 @@ export function createInitialStore(): SafeStepStore {
     bandId: 'SKB-101',
     childName: 'آدم كريم',
     editionId: 'batman',
-    safeRadius: 18,
+    safeRadius: 6,
     mallName: defaultMall,
   });
 
@@ -93,4 +93,9 @@ export function saveSingleBandToCache(band: BandSession): void {
 export function buildParentScanUrl(baseUrl: string, bandId: string): string {
   const cleanBase = baseUrl.trim().replace(/[?#].*$/, '');
   return `${cleanBase}?p=${encodeURIComponent(bandId)}`;
+}
+
+export function buildWristbandScanUrl(baseUrl: string, bandId: string): string {
+  const cleanBase = baseUrl.trim().replace(/[?#].*$/, '');
+  return `${cleanBase}?w=${encodeURIComponent(bandId)}`;
 }

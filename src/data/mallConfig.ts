@@ -201,8 +201,16 @@ export const MALL_GATES: MallGate[] = [
   },
 ];
 
+export const SAFE_RADIUS_PRESETS = [
+  { id: 'jury', label: 'وضع قاعة العرض (6 متر)', shortLabel: 'قاعة العرض 6م', radius: 6 },
+  { id: 'medium', label: 'وضع المول المتوسط (15 متر)', shortLabel: 'مول متوسط 15م', radius: 15 },
+  { id: 'large', label: 'وضع المول الكبير (25 متر)', shortLabel: 'مول كبير 25م', radius: 25 },
+] as const;
+
 export const DEFAULT_PARENT_POS: Point = { x: 500, y: 318 };
-export const DEFAULT_CHILD_POS: Point = { x: 554, y: 296 };
+export const DEFAULT_CHILD_POS: Point = { x: 518, y: 306 };
+
+export const ZERO_CALIBRATED_OFFSET: Point = { x: 6, y: 0 }; // 0.5m separation at zero point
 
 export function clampToMall(p: Point): Point {
   return {

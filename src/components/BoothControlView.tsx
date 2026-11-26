@@ -13,6 +13,7 @@ import {
   Check,
   CheckCircle2,
   Copy,
+  Crosshair,
   DoorOpen,
   ExternalLink,
   Footprints,
@@ -26,15 +27,21 @@ import {
   ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
+  Smartphone,
   Unlock,
   UserCheck,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react';
-import { EDITION_LIST, WRISTBAND_EDITIONS, getZoneBadgeStatus } from '../data/mallConfig';
-import { BandSession, EditionId, Point, ScenarioId } from '../types/safestep';
-import { buildParentScanUrl } from '../utils/storage';
+import {
+  EDITION_LIST,
+  SAFE_RADIUS_PRESETS,
+  WRISTBAND_EDITIONS,
+  getZoneBadgeStatus,
+} from '../data/mallConfig';
+import { BandSession, EditionId, MobileRole, Point, ScenarioId } from '../types/safestep';
+import { buildParentScanUrl, buildWristbandScanUrl } from '../utils/storage';
 import { EditionBadge } from './EditionBadge';
 import { QrCodeCanvas } from './QrCodeCanvas';
 import { SmartMallMap } from './SmartMallMap';
@@ -56,6 +63,7 @@ interface BoothControlViewProps {
   onConfirmClaspLock: () => void;
   onAcknowledgeLeftBehind: () => void;
   onResetTrail: () => void;
+  onCalibrateZero: () => void;
   onCheckoutBand: (bandId: string, pin: string) => { ok: boolean; error?: string };
   audioEnabled: boolean;
   onToggleAudio: () => void;
@@ -125,6 +133,7 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
   onConfirmClaspLock,
   onAcknowledgeLeftBehind,
   onResetTrail,
+  onCalibrateZero,
   onCheckoutBand,
   audioEnabled,
   onToggleAudio,
@@ -135,10 +144,11 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
   // Issuance Form State
   const [childName, setChildName] = useState('');
   const [selectedEdition, setSelectedEdition] = useState<EditionId>('batman');
-  const [issueRadius, setIssueRadius] = useState(18);
+  const [issueRadius, setIssueRadius] = useState(6);
   const [issueError, setIssueError] = useState('');
 
-  // QR Copy & Edit URL State
+  // QR Copy, Role Toggle & Edit URL State
+  const [qrTargetRole, setQrTargetRole] = useState<MobileRole>('parent');
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [editingBaseUrl, setEditingBaseUrl] = useState(false);
 
@@ -184,7 +194,15 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
     }
   };
 
-  const scanUrl = activeBand ? buildParentScanUrl(publicBaseUrl, activeBand.bandId) : '';
+  const scanUrl = activeBand
+    ? qrTargetRole === 'parent'
+      ? buildParentScanUrl(publicBaseUrl, activeBand.bandId)
+      : buildWristbandScanUrl(publicBaseUrl, activeBand.bandId)
+    : '';
+
+  const isDualPhoneActive = Boolean(
+    activeBand?.wristbandActiveAt && Date.now() - activeBand.wristbandActiveAt < 60000
+  );
 
   const handleCopyScanUrl = () => {
     if (!scanUrl) return;
@@ -332,7 +350,7 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
                 </div>
                 <input
                   type="range"
-                  min={10}
+                  min={4}
                   max={35}
                   step={1}
                   value={issueRadius}
@@ -340,8 +358,8 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
                   className="w-full arch-slider"
                 />
                 <div className="flex justify-between text-[11px] text-slate-400 mt-1 tabular-nums">
-                  <span>10 م</span>
-                  <span>22 م</span>
+                  <span>4 م</span>
+                  <span>15 م</span>
                   <span>35 م</span>
                 </div>
               </div>
@@ -532,6 +550,38 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
                   </div>
                 </div>
 
+                {/* Jury Hall Distance Presets + One-Tap Zero Calibration Bar */}
+                <div className="flex flex-wrap items-center justify-between gap-2.5 py-2.5 px-3 rounded-xl bg-slate-100/80 border border-slate-200/70">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {SAFE_RADIUS_PRESETS.map((preset) => {
+                      const active = activeBand.safeRadius === preset.radius;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => onUpdateSafeRadius(preset.radius)}
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all whitespace-nowrap ${
+                            active
+                              ? 'bg-slate-900 text-white shadow-sm'
+                              : 'bg-white/90 text-slate-700 hover:bg-white border border-slate-200/80'
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={onCalibrateZero}
+                    className="px-3.5 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-[11px] font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                  >
+                    <Crosshair className="w-3.5 h-3.5" strokeWidth={2} />
+                    <span>معايرة نقطة الصفر هنا (0 متر)</span>
+                  </button>
+                </div>
+
                 {/* Bespoke 2.5D Smart Mall Map */}
                 <SmartMallMap
                   band={activeBand}
@@ -595,7 +645,7 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
 
             {/* Right Column (4 cols): Instant QR Scan Card + 4-Digit Return PIN Checkout */}
             <div className="xl:col-span-4 space-y-5">
-              {/* Instant Cross-Device QR Scan Card */}
+              {/* Instant Cross-Device QR Scan Card (Supports 1-Phone + Laptop OR 2-Phone Demo) */}
               <div className="glass-surface rounded-2xl p-5 space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
@@ -603,8 +653,12 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
                       <QrCode className="w-4 h-4" strokeWidth={1.85} />
                     </div>
                     <div>
-                      <h2 className="text-sm font-bold text-slate-900">كود ربط هاتف ولي الأمر</h2>
-                      <p className="text-[11px] text-slate-500">امسح بالكاميرا للمتابعة الحية فوراً</p>
+                      <h2 className="text-sm font-bold text-slate-900">أكواد الربط المباشر للهواتف</h2>
+                      <p className="text-[11px] text-slate-500">
+                        {isDualPhoneActive
+                          ? 'وضع موبايلين نشط: قياس المسافة بين الهاتفين'
+                          : 'وضع موبايل واحد مع اللاب: امسح وامشِ للتحرك المباشر'}
+                      </p>
                     </div>
                   </div>
                   <span className="text-xs font-bold text-slate-900 tabular-nums">
@@ -612,10 +666,40 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
                   </span>
                 </div>
 
+                {/* 2-Way QR Mode Toggle (Parent Phone ?p= vs Child Wristband Phone ?w=) */}
+                <div className="grid grid-cols-2 gap-1.5 p-1 rounded-xl bg-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setQrTargetRole('parent')}
+                    className={`py-2 px-2 rounded-lg text-[11px] font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                      qrTargetRole === 'parent'
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">كود الهاتف الأول (ولي الأمر)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setQrTargetRole('wristband')}
+                    className={`py-2 px-2 rounded-lg text-[11px] font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                      qrTargetRole === 'wristband'
+                        ? 'bg-white text-slate-900 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">كود هاتف السوار (لو معك موبايلين)</span>
+                  </button>
+                </div>
+
                 <div className="flex flex-col items-center justify-center py-4 px-3 rounded-xl bg-white border border-slate-200/80">
                   <QrCodeCanvas value={scanUrl} size={172} />
                   <p className="text-xs font-semibold text-slate-800 mt-3">
-                    امسح الكود لمتابعة {activeBand.childName}
+                    {qrTargetRole === 'parent'
+                      ? `امسح لربط هاتف ولي الأمر (${activeBand.childName})`
+                      : `امسح لتحويل الهاتف الثاني إلى سوار (${activeBand.childName})`}
                   </p>
                   <p className="text-[11px] text-slate-400 mt-0.5 tabular-nums">
                     رمز التسليم الخاص: {activeBand.returnPin}
@@ -643,7 +727,7 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
                     className="py-2.5 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white flex items-center justify-center gap-1.5 transition-colors whitespace-nowrap"
                   >
                     <ExternalLink className="w-3.5 h-3.5" strokeWidth={1.8} />
-                    <span>فتح وضع الهاتف</span>
+                    <span>{qrTargetRole === 'parent' ? 'فتح هاتف ولي الأمر' : 'فتح هاتف السوار'}</span>
                   </a>
                 </div>
 
@@ -896,7 +980,7 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
                 </div>
                 <input
                   type="range"
-                  min={10}
+                  min={4}
                   max={35}
                   step={1}
                   value={activeBand.safeRadius}
@@ -904,8 +988,8 @@ export const BoothControlView: React.FC<BoothControlViewProps> = ({
                   className="w-full arch-slider"
                 />
                 <div className="flex justify-between text-[11px] text-slate-400 tabular-nums">
-                  <span>10 م</span>
-                  <span>22 م</span>
+                  <span>4 م</span>
+                  <span>15 م</span>
                   <span>35 م</span>
                 </div>
               </div>

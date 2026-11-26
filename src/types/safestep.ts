@@ -50,7 +50,11 @@ export interface BandSession {
   recoveredMessage: string;
   updatedAt: number;
   mallName: string;
+  wristbandActiveAt?: number;
+  parentPhoneActiveAt?: number;
 }
+
+export type MobileRole = 'parent' | 'wristband';
 
 export interface SafeStepStore {
   bands: Record<string, BandSession>;
